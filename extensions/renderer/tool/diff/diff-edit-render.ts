@@ -111,10 +111,9 @@ export function renderEditDiffResult(
 	}
 
 	const splitRows = buildSplitRows(renderEntries);
-	const showHashlineAnchors =
-		options.expanded === true &&
-		renderEntries.some((entry) => entry.kind === "line" && !!entry.hashlineAnchorContent);
-	const lineNumberWidth = getLineNumberWidth(renderEntries, showHashlineAnchors);
+	const hasHashlineAnchors = renderEntries.some(
+		(entry) => entry.kind === "line" && !!entry.hashlineAnchorContent,
+	);
 	const palette = resolveDiffPalette(theme);
 	// Rich diffs use ccstyle's self shell. Keep the panel transparent so the
 	// separator cannot leak toolSuccessBg across the entire new column.
@@ -141,6 +140,16 @@ export function renderEditDiffResult(
 			const configKey = displayConfigCacheKey(live);
 			const safeWidth = normalizeDiffRenderWidth(width);
 			const mode = resolveDiffPresentationMode(live, safeWidth, canRenderSplitLayout(safeWidth));
+			// Label policy is width/mode-aware: anchor labels only in expanded
+			// unified; split/compact/summary and `hashlineAnchors: "off"` always
+			// show numeric labels with plain content. The gutter width is derived
+			// from the same per-render flag so it fits the widest visible label.
+			const showHashlineAnchors =
+				live.hashlineAnchors !== "off" &&
+				options.expanded === true &&
+				mode === "unified" &&
+				hasHashlineAnchors;
+			const lineNumberWidth = getLineNumberWidth(parsed.entries, showHashlineAnchors);
 			const hovered = options.isHovered?.() ?? false;
 			const cached = cache.get(safeWidth, options.expanded, mode, configKey, hovered);
 			if (cached) {

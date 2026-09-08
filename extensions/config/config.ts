@@ -12,6 +12,7 @@ export type CompactStyleMode = "on" | "compact" | "off";
 
 export type DiffViewMode = "auto" | "split" | "unified";
 export type DiffIndicatorMode = "bars" | "classic" | "none";
+export type HashlineAnchorsMode = "auto" | "on" | "off";
 
 export interface ToolDisplayConfig {
 	diffViewMode: DiffViewMode;
@@ -21,6 +22,8 @@ export interface ToolDisplayConfig {
 	/** Write-only collapsed body lines. 0 = `↳ created • click to show more`. */
 	writeDiffCollapsedLines: number;
 	diffWordWrap: boolean;
+	/** Hashline anchor rendering: auto-detect, lenient grep handling, or off. */
+	hashlineAnchors: HashlineAnchorsMode;
 	expandedPreviewMaxLines: number;
 }
 
@@ -36,6 +39,7 @@ export const DEFAULT_TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
 	 */
 	writeDiffCollapsedLines: 0,
 	diffWordWrap: true,
+	hashlineAnchors: "auto",
 	/**
 	 * Expanded TaskList body cap. Tool Input/Output and diffs use their own settings;
 	 * an expanded diff always renders every line.
@@ -55,6 +59,7 @@ export type Config = {
 	expandedPreviewMaxLines: number;
 	expandedInputMaxLines: number;
 	expandedOutputMaxLines: number;
+	hashlineAnchors: HashlineAnchorsMode;
 	inputClip: number;
 	useSummaryTitlesAsThinkingTitle: boolean;
 	previewLines: number;
@@ -82,6 +87,8 @@ const LEGACY_CONFIG_PATH = join(AGENT_DIR, "claude-code-style.json");
 
 export const DIFF_VIEW_MODES: DiffViewMode[] = ["auto", "split", "unified"];
 export const DIFF_INDICATOR_MODES: DiffIndicatorMode[] = ["bars", "classic", "none"];
+/** Hashline anchor rendering presets (see HashlineAnchorsMode). */
+export const HASHLINE_ANCHORS_VALUES: HashlineAnchorsMode[] = ["auto", "on", "off"];
 export const DIFF_SPLIT_MIN_WIDTH_VALUES = ["80", "100", "120", "140", "160", "180"];
 export const DIFF_COLLAPSED_LINES_VALUES = ["12", "24", "36", "48", "80", "120"];
 /** Write collapsed presets. 0 = stats only (`+N -0` + expand hint). */
@@ -121,6 +128,7 @@ export const DEFAULT_CONFIG: Config = {
 	editDiffCollapsedLines: DEFAULT_TOOL_DISPLAY_CONFIG.editDiffCollapsedLines,
 	writeDiffCollapsedLines: DEFAULT_TOOL_DISPLAY_CONFIG.writeDiffCollapsedLines,
 	diffWordWrap: DEFAULT_TOOL_DISPLAY_CONFIG.diffWordWrap,
+	hashlineAnchors: DEFAULT_TOOL_DISPLAY_CONFIG.hashlineAnchors,
 	expandedPreviewMaxLines: DEFAULT_TOOL_DISPLAY_CONFIG.expandedPreviewMaxLines,
 	expandedInputMaxLines: 5,
 	expandedOutputMaxLines: 10,
@@ -205,6 +213,11 @@ export function normalizeConfig(input: unknown): Config {
 			500,
 		),
 		diffWordWrap: source.diffWordWrap !== false,
+		hashlineAnchors: pickEnum(
+			source.hashlineAnchors,
+			["auto", "on", "off"] as const,
+			DEFAULT_CONFIG.hashlineAnchors,
+		),
 		expandedPreviewMaxLines: pickPositiveInt(
 			source.expandedPreviewMaxLines,
 			DEFAULT_CONFIG.expandedPreviewMaxLines,
@@ -266,6 +279,7 @@ export function getToolDisplayConfig(source: Config = config): ToolDisplayConfig
 		editDiffCollapsedLines: source.editDiffCollapsedLines,
 		writeDiffCollapsedLines: source.writeDiffCollapsedLines,
 		diffWordWrap: source.diffWordWrap,
+		hashlineAnchors: source.hashlineAnchors,
 		expandedPreviewMaxLines: source.expandedPreviewMaxLines,
 	};
 }
@@ -284,6 +298,7 @@ export function formatConfigStatus(source: Config = config): string {
 		`editCollapsed=${source.editDiffCollapsedLines}`,
 		`writeCollapsed=${source.writeDiffCollapsedLines}`,
 		`diffWordWrap=${source.diffWordWrap ? "on" : "off"}`,
+		`hashlineAnchors=${source.hashlineAnchors}`,
 		`expandedMax=${source.expandedPreviewMaxLines}`,
 		`expandedInput=${source.expandedInputMaxLines}`,
 		`expandedOutput=${source.expandedOutputMaxLines}`,

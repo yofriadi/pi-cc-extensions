@@ -38,19 +38,21 @@ import {
 	EXPANDED_PREVIEW_MAX_LINES_VALUES,
 	formatExcludeRenderers,
 	getCompactThinkingConfig,
+	HASHLINE_ANCHORS_VALUES,
+	INPUT_CLIP_VALUES,
 	pickInputClip,
 	pickPositiveInt,
 	pickPositiveNumber,
 	SCROLL_STEP_LINES_VALUES,
 	THINKING_ANIMATION_INTERVAL_VALUES,
 	THINKING_PREVIEW_LINES_VALUES,
-	INPUT_CLIP_VALUES,
 	WRITE_DIFF_COLLAPSED_LINES_VALUES,
 	updateConfig,
 	type CompactStyleMode,
 	type Config,
 	type DiffIndicatorMode,
 	type DiffViewMode,
+	type HashlineAnchorsMode,
 } from "./config.ts";
 
 /** renderer 注入的渲染副作用，面板自身不触碰渲染状态。 */
@@ -199,6 +201,16 @@ function diffIndicatorDescription(mode: DiffIndicatorMode): string {
 	if (mode === "classic") return "Classic +/- gutters on changed lines.";
 	if (mode === "none") return "No change indicators; rely on color alone.";
 	return "Vertical bar indicators on changed lines (default).";
+}
+
+function hashlineAnchorsDescription(mode: HashlineAnchorsMode): string {
+	if (mode === "on") {
+		return "Lenient grep scaffolding; otherwise like auto. No extra effect for read.";
+	}
+	if (mode === "off") {
+		return "Disable hashline-aware rendering; prefixes and numbers render as plain text.";
+	}
+	return "Auto: render hashline read/grep anchor rails and diff anchor labels only when strictly detected.";
 }
 
 /** 额外功能开关项：on/off 二值，描述随状态切换；切换后需重启生效。 */
@@ -463,6 +475,13 @@ export async function showCcstylePanel(
 			currentValue: config.diffWordWrap ? "on" : "off",
 			values: ["on", "off"],
 		};
+		const hashlineAnchorsSetting = {
+			id: "hashlineAnchors",
+			label: "Hashline anchors",
+			description: hashlineAnchorsDescription(config.hashlineAnchors),
+			currentValue: config.hashlineAnchors,
+			values: [...HASHLINE_ANCHORS_VALUES],
+		};
 		const expandedInputSetting = {
 			id: "expandedInputMaxLines",
 			label: "Expanded input lines",
@@ -726,6 +745,11 @@ export async function showCcstylePanel(
 						? "Long diff lines wrap within the panel width."
 						: "Long diff lines are truncated to the panel width.";
 					break;
+				case "hashlineAnchors":
+					updateConfig({ hashlineAnchors: value as HashlineAnchorsMode });
+					hashlineAnchorsSetting.currentValue = config.hashlineAnchors;
+					hashlineAnchorsSetting.description = hashlineAnchorsDescription(config.hashlineAnchors);
+					break;
 				case "expandedInputMaxLines":
 					updateConfig({
 						expandedInputMaxLines: pickPositiveInt(
@@ -842,6 +866,7 @@ export async function showCcstylePanel(
 					diffCollapsedSetting,
 					writeDiffCollapsedSetting,
 					diffWordWrapSetting,
+					hashlineAnchorsSetting,
 				],
 			},
 			{

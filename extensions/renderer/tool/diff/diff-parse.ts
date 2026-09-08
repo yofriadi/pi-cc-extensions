@@ -49,6 +49,13 @@ const HASHLINE_ANCHOR_LINE_PATTERN = /^([+\- ])(\s*\d+)#([A-Za-z0-9]+| {2}):(.*)
 // Pi still emits space-separated numbered rows, unlike OMP's pipe-delimited format.
 const PI_LINE_PATTERN = /^([+\- ])(\s*\d+)\s(.*)$/;
 const PI_OMISSION_LINE_PATTERN = /^ {3,}\.\.\.$/;
+// Strict hashline gate: only the upstream alphabet, hash slots 2–4 long. The
+// loose pattern above still parses legacy shapes for label rendering, but this
+// one decides whether removed-line stripping/elision detection may activate.
+const HASHLINE_STRICT_ANCHOR_PATTERN = /^([+\- ])(\s*\d+)#([ZPMQVRWSNKTXJBYH]{2,4}):(.*)$/;
+// Hashline elision rows: spaces-only prefix then `...` — no digits (upstream
+// emits `(lineNumWidth + 2)` spaces; an earlier `␣NN␣...` reading was wrong).
+const HASHLINE_ELISION_LINE_PATTERN = /^ +\.\.\.$/;
 const HUNK_HEADER_PATTERN = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@(.*)$/;
 const MIN_LINE_NUMBER_WIDTH = 2;
 
@@ -71,9 +78,61 @@ function toParsedDiffLine(
 	return { lineKind: "context", lineNumber: normalizedLineNumber, content };
 }
 
+const hashlineRemovedPatterns = new Map<number, RegExp>();
+
+function hashlineRemovedPattern(pad: number): RegExp {
+	let pattern = hashlineRemovedPatterns.get(pad);
+	if (!pattern) {
+		pattern = new RegExp(`^-(\\s*\\d+) {${pad}}(.*)$`);
+		hashlineRemovedPatterns.set(pad, pattern);
+	}
+	return pattern;
+}
+
+/**
+ * Hashline-annotated diff gate: ≥1 strict-alphabet anchor line, no `@@` hunk
+ * headers, no `diff --git`/`+++ `/`--- ` file headers. Upstream
+ * generateDiffString emits none of those, so standard unified diffs whose
+ * content merely looks anchor-shaped can never trigger the strip.
+ */
+function isHashlineAnnotatedDiff(diffText: string): boolean {
+	let hasStrictAnchor = false;
+	for (const rawLine of diffText.replace(/\r/g, "").split("\n")) {
+		if (HASHLINE_STRICT_ANCHOR_PATTERN.test(rawLine)) {
+			hasStrictAnchor = true;
+			continue;
+		}
+		if (
+			rawLine.startsWith("@@") ||
+			rawLine.startsWith("diff --git") ||
+			rawLine.startsWith("--- ") ||
+			rawLine.startsWith("+++ ")
+		) {
+			return false;
+		}
+	}
+	return hasStrictAnchor;
+}
+
+/**
+ * Removed-line blank-slot pad width, derived from the diff's own added/context
+ * anchors: all upstream anchors share one hash length, so pad = hashLength + 2
+ * (default hash length 2 → 4 spaces).
+ */
+function hashlineRemovedPadWidth(diffText: string): number {
+	for (const rawLine of diffText.replace(/\r/g, "").split("\n")) {
+		const match = rawLine.match(HASHLINE_STRICT_ANCHOR_PATTERN);
+		if (match) {
+			return (match[3] ?? "").length + 2;
+		}
+	}
+	return 4;
+}
+
 function parseCanonicalDiffLine(
 	line: string,
 	allowPiFormat: boolean,
+	hashlineRemovedPad: number | null,
 ): {
 	lineKind: DiffLineKind;
 	lineNumber: string;
@@ -90,6 +149,18 @@ function parseCanonicalDiffLine(
 			...parsed,
 			hashlineAnchorContent: `${lineNumber.trim()}#${hash}:${content}`,
 		};
+	}
+
+	if (hashlineRemovedPad !== null) {
+		// Upstream removed lines carry a BLANK hash slot: `-<padded NN>` plus
+		// exactly (hashLength + 2) spaces, with no `#`/`:` at all. Match that pad
+		// width EXACTLY — the pad and a removed line's real leading indentation
+		// are contiguous space runs, and a greedy range would strip true indent
+		// from indented removed content.
+		const removedMatch = line.match(hashlineRemovedPattern(hashlineRemovedPad));
+		if (removedMatch) {
+			return toParsedDiffLine("-", removedMatch[1] ?? "", removedMatch[2] ?? "");
+		}
 	}
 
 	const match =
@@ -210,6 +281,12 @@ export function parseDiff(diffText: string): ParsedDiff {
 	let lineNumberDelta = 0;
 	let hasHunkHeader = false;
 
+	// Hashline-annotated diffs (pi-hashline-edit details.diff): removed lines
+	// carry a blank hash slot padded to hashLength + 2, and elisions are
+	// spaces-only `...` rows. Both shapes are recognized only behind the gate.
+	const hashlineAnnotated = isHashlineAnnotatedDiff(diffText);
+	const hashlineRemovedPad = hashlineAnnotated ? hashlineRemovedPadWidth(diffText) : null;
+
 	for (const rawLine of diffText.replace(/\r/g, "").split("\n")) {
 		stats.lines++;
 
@@ -247,7 +324,7 @@ export function parseDiff(diffText: string): ParsedDiff {
 		}
 
 		// Pi's headerless format is ambiguous with numeric source text in unified hunks.
-		const canonical = parseCanonicalDiffLine(rawLine, !hasHunkHeader);
+		const canonical = parseCanonicalDiffLine(rawLine, !hasHunkHeader, hashlineRemovedPad);
 		if (canonical) {
 			hunkIndex = ensureImplicitHunk(hunkIndex);
 			stats.hunks = Math.max(stats.hunks, hunkIndex);
@@ -341,6 +418,14 @@ export function parseDiff(diffText: string): ParsedDiff {
 				rawLine,
 				hunkIndex,
 			);
+			continue;
+		}
+		// Hashline elisions — upstream emits (lineNumWidth + 2) spaces followed by
+		// `...` with NO digits — are non-line entries. Without this they fall into
+		// the context branch below and inflate stats.context. Standard diffs
+		// (gate closed) keep the previous context-line behavior.
+		if (hashlineRemovedPad !== null && HASHLINE_ELISION_LINE_PATTERN.test(rawLine)) {
+			entries.push(createMetaEntry(rawLine, hunkIndex));
 			continue;
 		}
 

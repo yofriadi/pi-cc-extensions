@@ -5,6 +5,7 @@ import { showMoreHintText } from "./show-more-hint.ts";
 import { TOOL_LOADING_INTERVAL_MS, toolLoadingIcon } from "../../utils/tool-loading-icon.ts";
 import { getToolMouseTui } from "../mouse/scroll.ts";
 import { sanitizeToolResultText } from "../../utils/tool-result-sanitize.ts";
+import type { HashlineOutputStyler } from "./hashline.ts";
 
 const TOOL_VIEWPORT_WIDTH_RATIO = 0.8;
 /** 宽屏右侧留白上限：比例留白超过这么多列时改用固定留白。 */
@@ -253,6 +254,18 @@ const EXPANDED_TOOL_IO_VIEW_GENERATION = Symbol("ccstyle-expanded-tool-io-view")
  *
  * Reused across re-renders via context.lastComponent when possible.
  */
+
+/** Options bag for ExpandedToolIoView — keeps the 7 positional params stable. */
+export interface ExpandedToolIoViewOptions {
+	/**
+	 * Body-level output styler (hashline anchor rail). Identity participates in
+	 * setContent's change detection: a config toggle changes which module-level
+	 * styler reference is passed (fires invalidation), repeated same-config
+	 * renders pass the same reference (cache hit).
+	 */
+	styleOutputLines?: HashlineOutputStyler | null;
+}
+
 export class ExpandedToolIoView {
 	readonly [EXPANDED_TOOL_IO_VIEW_GENERATION] = true;
 	private inputBody: string;
@@ -272,6 +285,9 @@ export class ExpandedToolIoView {
 	/** flushLeft：贴左渲染（mode=on 展开卡）；默认 false 保留前导空格（compact 等共用路径）。 */
 	private flushLeft: boolean;
 
+	/** Output 体的 body 级样式器（hashline 锚点栏）；null 走原渲染。身份参与变更检测。 */
+	private styleOutputLines: HashlineOutputStyler | null;
+
 	constructor(
 		theme: any,
 		inputBody: string,
@@ -280,6 +296,7 @@ export class ExpandedToolIoView {
 		maxOutputLines = config.expandedOutputMaxLines,
 		maxInputLines = config.expandedInputMaxLines,
 		flushLeft = false,
+		options: ExpandedToolIoViewOptions = {},
 	) {
 		this.theme = theme;
 		this.inputBody = inputBody;
@@ -288,6 +305,7 @@ export class ExpandedToolIoView {
 		this.maxOutputLines = Math.max(1, maxOutputLines);
 		this.maxInputLines = Math.max(1, maxInputLines);
 		this.flushLeft = flushLeft;
+		this.styleOutputLines = options.styleOutputLines ?? null;
 	}
 
 	setContent(
@@ -297,18 +315,24 @@ export class ExpandedToolIoView {
 		maxOutputLines?: number,
 		maxInputLines?: number,
 		flushLeft?: boolean,
+		options?: ExpandedToolIoViewOptions,
 	): void {
 		const nextOut =
 			maxOutputLines !== undefined ? Math.max(1, maxOutputLines) : this.maxOutputLines;
 		const nextIn = maxInputLines !== undefined ? Math.max(1, maxInputLines) : this.maxInputLines;
 		const nextFlush = flushLeft !== undefined ? flushLeft : this.flushLeft;
+		const nextStyle =
+			options && options.styleOutputLines !== undefined
+				? options.styleOutputLines
+				: this.styleOutputLines;
 		if (
 			this.inputBody === inputBody &&
 			this.outputBody === outputBody &&
 			this.isError === isError &&
 			this.maxOutputLines === nextOut &&
 			this.maxInputLines === nextIn &&
-			this.flushLeft === nextFlush
+			this.flushLeft === nextFlush &&
+			this.styleOutputLines === nextStyle
 		) {
 			return;
 		}
@@ -318,6 +342,7 @@ export class ExpandedToolIoView {
 		this.maxOutputLines = nextOut;
 		this.maxInputLines = nextIn;
 		this.flushLeft = nextFlush;
+		this.styleOutputLines = nextStyle;
 		this.invalidate();
 	}
 
@@ -409,14 +434,6 @@ export class ExpandedToolIoView {
 			lines.push(truncateToWidth(theme.fg("dim", `${lead}│`), safeWidth, ""));
 		};
 
-		/** Style `key: value` input rows — dim keys, readable values. */
-		const styleInputLine = (rawLine: string): string => {
-			const match = rawLine.match(/^([A-Za-z_][\w.-]*)(:\s*)(.*)$/);
-			if (!match) return theme.fg("muted", rawLine);
-			const [, key, sep, rest] = match;
-			return theme.fg("dim", key + sep) + theme.fg("muted", rest ?? "");
-		};
-
 		const pushBody = (
 			body: string,
 			opts: { input?: boolean; limit: number; continued?: boolean; section: ToolIoSection },
@@ -427,20 +444,26 @@ export class ExpandedToolIoView {
 				return false;
 			}
 			const sourceLines = raw.split("\n");
-			const wrapped: string[] = [];
-			for (const source of sourceLines) {
-				const styled = opts.input ? styleInputLine(source) : theme.fg(bodyColor, source);
-				const parts = wrapTextWithAnsi(styled, contentWidth);
-				if (parts.length === 0) wrapped.push(styled);
-				else wrapped.push(...parts);
-			}
+			// Shared wrap plan — bodyExceedsLineLimit consumes the same rows so the
+			// show-more pre-decision wraps at the width the body actually wraps at.
+			const rows = planIoBodyRows(
+				sourceLines,
+				contentWidth,
+				Boolean(opts.input),
+				theme,
+				bodyColor,
+				opts.input ? null : this.styleOutputLines,
+			);
 			// Prefer source-line count so plain multi-line dumps always cap, even when
 			// theme/wrap measurements disagree slightly.
-			const truncated = wrapped.length > opts.limit || sourceLines.length > opts.limit;
-			const visible = truncated ? wrapped.slice(0, Math.min(opts.limit, wrapped.length)) : wrapped;
-			for (const line of visible) pushRailLine(line, opts.continued);
+			const truncated = rows.length > opts.limit || sourceLines.length > opts.limit;
+			const visible = truncated ? rows.slice(0, Math.min(opts.limit, rows.length)) : rows;
+			for (const row of visible) {
+				const styled = row.anchorRail ? `${theme.fg("dim", row.anchorRail)} ${row.text}` : row.text;
+				pushRailLine(styled, opts.continued);
+			}
 			if (truncated) {
-				const hidden = Math.max(0, wrapped.length - visible.length);
+				const hidden = Math.max(0, rows.length - visible.length);
 				if (hidden > 0) {
 					// hover 只高亮文字，圆点保持 dim（与 group hint 一致）。
 					const more =
@@ -470,6 +493,7 @@ export class ExpandedToolIoView {
 			false,
 			theme,
 			bodyColor,
+			this.styleOutputLines,
 		);
 
 		if (hasInput) {
@@ -522,6 +546,82 @@ export function isExpandedToolIoView(value: unknown): value is ExpandedToolIoVie
 	);
 }
 
+/** One planned visual row: styled text plus its anchor-rail label ("" = full-width row). */
+interface PlannedIoRow {
+	text: string;
+	anchorRail: string;
+}
+
+/** Style one plain body row — Input rows dim keys, Output rows take the body color. */
+function styleIoSourceLine(
+	source: string,
+	asInput: boolean,
+	theme: any,
+	bodyColor: string,
+): string {
+	if (asInput) {
+		const match = source.match(/^([A-Za-z_][\w.-]*)(:\s*)(.*)$/);
+		if (match) {
+			return theme.fg("dim", match[1]! + match[2]!) + theme.fg("muted", match[3] ?? "");
+		}
+		return theme.fg("muted", source);
+	}
+	return theme.fg(bodyColor, source);
+}
+
+/**
+ * Shared wrap plan for Input/Output bodies. Output rows may carry a hashline
+ * anchor rail: only the content column wraps at (width − rail − 1) and wrapped
+ * continuations keep a blank rail; structure/advisory rows render full-width.
+ * bodyExceedsLineLimit consumes the same plan so show-more is decided at the
+ * same effective width the body actually wraps at. Input never gets a styler.
+ */
+function planIoBodyRows(
+	sourceLines: string[],
+	contentWidth: number,
+	asInput: boolean,
+	theme: any,
+	bodyColor: string,
+	styleOutputLines: HashlineOutputStyler | null,
+): PlannedIoRow[] {
+	if (!asInput && styleOutputLines) {
+		const classified = styleOutputLines(sourceLines);
+		if (classified && classified.length === sourceLines.length) {
+			const rows: PlannedIoRow[] = [];
+			for (const item of classified) {
+				if (item.rail) {
+					const railWidth = visibleWidth(item.rail);
+					const styled = theme.fg(bodyColor, item.content);
+					const parts = wrapTextWithAnsi(styled, Math.max(1, contentWidth - railWidth - 1));
+					if (parts.length === 0) {
+						rows.push({ text: styled, anchorRail: item.rail });
+					} else {
+						rows.push({ text: parts[0]!, anchorRail: item.rail });
+						const blankRail = " ".repeat(railWidth);
+						for (let index = 1; index < parts.length; index++) {
+							rows.push({ text: parts[index]!, anchorRail: blankRail });
+						}
+					}
+					continue;
+				}
+				const styled = theme.fg("dim", item.content);
+				const parts = wrapTextWithAnsi(styled, contentWidth);
+				if (parts.length === 0) rows.push({ text: styled, anchorRail: "" });
+				else for (const part of parts) rows.push({ text: part, anchorRail: "" });
+			}
+			return rows;
+		}
+	}
+	const rows: PlannedIoRow[] = [];
+	for (const source of sourceLines) {
+		const styled = styleIoSourceLine(source, asInput, theme, bodyColor);
+		const parts = wrapTextWithAnsi(styled, contentWidth);
+		if (parts.length === 0) rows.push({ text: styled, anchorRail: "" });
+		else for (const part of parts) rows.push({ text: part, anchorRail: "" });
+	}
+	return rows;
+}
+
 /** True when body needs truncation at the given line limit (source lines or wrapped rows). */
 function bodyExceedsLineLimit(
 	body: string,
@@ -530,27 +630,16 @@ function bodyExceedsLineLimit(
 	asInput: boolean,
 	theme: any,
 	bodyColor = "toolOutput",
+	styleOutputLines: HashlineOutputStyler | null = null,
 ): boolean {
 	const raw = body.replace(/\t/g, "   ").replace(/\n+$/, "");
 	if (!raw.trim()) return false;
 	const sourceLines = raw.split("\n");
 	if (sourceLines.length > limit) return true;
-	let total = 0;
-	for (const source of sourceLines) {
-		let styled: string;
-		if (asInput) {
-			const match = source.match(/^([A-Za-z_][\w.-]*)(:\s*)(.*)$/);
-			styled = match
-				? theme.fg("dim", match[1] + match[2]) + theme.fg("muted", match[3] ?? "")
-				: theme.fg("muted", source);
-		} else {
-			styled = theme.fg(bodyColor, source);
-		}
-		const parts = wrapTextWithAnsi(styled, contentWidth);
-		total += Math.max(1, parts.length);
-		if (total > limit) return true;
-	}
-	return false;
+	return (
+		planIoBodyRows(sourceLines, contentWidth, asInput, theme, bodyColor, styleOutputLines).length >
+		limit
+	);
 }
 
 export function renderCollapsedToolResult(body: string, collapsedHint = ""): string {
@@ -696,6 +785,7 @@ export function renderExpandedToolResult(
 	context?: any,
 	/** mode=on 展开卡贴左；compact 等保持默认前导空格 */
 	flushLeft = false,
+	options?: ExpandedToolIoViewOptions,
 ): ExpandedToolIoView | ExpandedToolResultText | Text {
 	const inputBody = formatToolInputArgs(args);
 	const outputBody = body;
@@ -713,6 +803,7 @@ export function renderExpandedToolResult(
 				maxOutputLines,
 				maxInputLines,
 				flushLeft,
+				options,
 			);
 			view = lastComponent;
 		} else {
@@ -724,6 +815,7 @@ export function renderExpandedToolResult(
 				maxOutputLines,
 				maxInputLines,
 				flushLeft,
+				options,
 			);
 		}
 		if (context) rememberIoView(context, view);

@@ -23,7 +23,7 @@
 	"linter": {
 		"enabled": true,
 		"rules": {
-			"preset": "none",
+			"recommended": false,
 			"correctness": {
 				"noUnusedVariables": "error"
 			}

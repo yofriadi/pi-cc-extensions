@@ -1,0 +1,53 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+# Example:
+#   context: |
+#     Tech stack: TypeScript, React, Node.js
+#     We use conventional commits
+#     Domain: e-commerce platform
+context: |
+  Project: pi-cc-extensions — a pi (pi-coding-agent) package providing Claude Code-style
+  TUI rendering (tool summaries, rich edit/write diffs), markdown enhancements, config
+  panel (/ccstyle), context inspection (/context), session references (@), and themes.
+
+  Tech stack: TypeScript (Node >= 22.19), no build step — pi loads ./extensions/index.ts
+  directly (strip-types). Runtime deps: @earendil-works/pi-coding-agent / pi-tui / pi-ai
+  (peer deps), @shikijs/cli, grok-mermaid, jiti.
+
+  Layout:
+    extensions/index.ts          — package entry
+    extensions/config/           — /ccstyle config + panel
+    extensions/renderer/         — default-mode, compact-mode, markdown-enhance
+    extensions/renderer/tool/    — tool result rendering (result.ts, grouping, message-display)
+    extensions/renderer/tool/diff/ — rich diff: diff-parse.ts (unified diff parser with
+                                   existing LINE#HASH anchor awareness), diff-edit-render.ts,
+                                   diff-layout.ts, diff-header.ts, diff-inline.ts, etc.
+    tests/                       — node --test tests/**/*.test.ts
+
+  Conventions:
+    - biome format (tabs, double quotes) — run `npm run format` after edits
+    - `npm run typecheck` (tsc --noEmit) and `npm test` must pass
+    - Rendering code is defensive: unknown/malformed tool payloads fall back to the
+      existing plain-text path, never throw.
+    - Comments in this codebase are bilingual (zh/en); new code should use concise
+      English comments matching surrounding style.
+
+  Key domain concept — pi-hashline-edit integration:
+    pi-hashline-edit is a separate pi package that overrides the built-in `read`, `edit`
+    (and opt-in `grep`) tools with hash-anchored versions. Its outputs carry `LINE#HASH:`
+    anchors (hash alphabet: ZPMQVRWSNKTXJBYH, 2 chars by default, user-configurable 2-4
+    via ~/.pi/agent/hashline.json). When both packages are installed, pi-cc-extensions
+    owns the rendering of those overridden tools.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours

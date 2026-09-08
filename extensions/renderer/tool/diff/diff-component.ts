@@ -52,6 +52,7 @@ export function displayConfigCacheKey(config: ToolDisplayConfig): string {
 		String(config.editDiffCollapsedLines),
 		String(config.writeDiffCollapsedLines),
 		config.diffWordWrap ? "1" : "0",
+		config.hashlineAnchors,
 	].join(":");
 }
 

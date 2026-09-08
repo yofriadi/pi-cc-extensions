@@ -32,6 +32,11 @@ import {
 	toolViewportWidth,
 } from "./tool/result.ts";
 import { oneLine } from "../utils/format.ts";
+import {
+	classifyHashlineBody,
+	getHashlineOutputStyler,
+	type HashlineOutputStyler,
+} from "./tool/hashline.ts";
 import { showMoreHintText } from "./tool/show-more-hint.ts";
 import {
 	CODEMODE_TOOL_NAME,
@@ -213,7 +218,32 @@ function renderExpandedTaskResult(
 	return formatted ? new Text(`↳ ${formatted}`, 0, 0) : undefined;
 }
 
-/** 用 ccstyle call/result 包装任意工具定义。 */
+/**
+ * read/grep 展开输出的 hashline 锚点栏 options bag；其他工具、错误结果与未命中
+ * 情形显式传 `styleOutputLines: null` —— setContent 以 undefined 表示「保持
+ * 原样」，空 bag 无法清除 recycled 视图上残留的样式器（off 切换 / 工具复用场景）。
+ * 错误结果按 spec 一律走原始渲染：error 路径上出现锚点栏会放大异常观感。
+ * 只对 raw content 分类：textFromResult(result, true) 会追加 `Details:` 块，
+ * 混入后所有真实结果都会分类失败（锚点栏永不渲染）。
+ * 配置 live 读取，off 直接短路；"on" 仅对 grep 启用宽容模式。
+ */
+export function hashlineToolIoOptions(
+	toolName: string,
+	result: any,
+	isError: boolean,
+): { styleOutputLines?: HashlineOutputStyler | null } {
+	if (isError || (toolName !== "read" && toolName !== "grep")) {
+		return { styleOutputLines: null };
+	}
+	const display = getToolDisplayConfig();
+	if (display.hashlineAnchors === "off") return { styleOutputLines: null };
+	const grepLenient = toolName === "grep" && display.hashlineAnchors === "on";
+	if (!classifyHashlineBody(textFromResult(result), { grepLenient })) {
+		return { styleOutputLines: null };
+	}
+	return { styleOutputLines: getHashlineOutputStyler(toolName, grepLenient) };
+}
+
 function createCcstyleTool(
 	originalTool: any,
 	writeExecutionMetadata: WriteExecutionMetadataStore,
@@ -398,6 +428,10 @@ function createCcstyleTool(
 					args,
 					context,
 					true, // mode=on：贴左，由外层 Box(1,1) 提供 1 格 padding
+					// Live config read per render; stable module-level styler refs keep
+					// the view identity cache hit in steady state. The bag explicitly
+					// clears a recycled view's styler (off/error/non-hashline).
+					hashlineToolIoOptions(toolName, result, Boolean(isError)),
 				);
 			}
 			if (context?.state) context.state.ccstyleIoView = undefined;

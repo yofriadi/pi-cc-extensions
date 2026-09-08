@@ -678,19 +678,28 @@ function compactEditWriteLine(
 	let statsText = "";
 	let statsStyled = "";
 	if (!isError && !isPending) {
-		const stats =
-			name === "edit"
-				? countEditDiffStats(component.result?.details)
-				: name === "write"
-					? countWriteDiffStats(
-							typeof args.content === "string" ? args.content : undefined,
-							writeMetadata?.get(component.toolCallId)?.previousContent,
-							writeMetadata?.get(component.toolCallId)?.fileExistedBeforeWrite,
-						)
-					: undefined;
-		if (stats) {
-			statsText = ` (+${stats.added} -${stats.removed})`;
-			statsStyled = ` ${theme.fg("dim", "(")}${theme.fg("success", `+${stats.added}`)} ${theme.fg("error", `-${stats.removed}`)}${theme.fg("dim", ")")}`;
+		if (name === "edit") {
+			// Edit-only zero-suppression: countEditDiffStats parses the same
+			// details.diff any re-scan would read, so a present-but-zero parse
+			// can never be rescued — omit the stats instead of faking (+0 -0).
+			// Missing/unparseable diffs stay omitted (unknown, not zero).
+			const stats = countEditDiffStats(component.result?.details);
+			if (stats && stats.added + stats.removed > 0) {
+				statsText = ` (+${stats.added} -${stats.removed})`;
+				statsStyled = ` ${theme.fg("dim", "(")}${theme.fg("success", `+${stats.added}`)} ${theme.fg("error", `-${stats.removed}`)}${theme.fg("dim", ")")}`;
+			}
+		} else if (name === "write") {
+			// Write stats come from a real content comparison where zero is
+			// truthful — keep showing (+0 -0) for genuine no-change writes.
+			const stats = countWriteDiffStats(
+				typeof args.content === "string" ? args.content : undefined,
+				writeMetadata?.get(component.toolCallId)?.previousContent,
+				writeMetadata?.get(component.toolCallId)?.fileExistedBeforeWrite,
+			);
+			if (stats) {
+				statsText = ` (+${stats.added} -${stats.removed})`;
+				statsStyled = ` ${theme.fg("dim", "(")}${theme.fg("success", `+${stats.added}`)} ${theme.fg("error", `-${stats.removed}`)}${theme.fg("dim", ")")}`;
+			}
 		}
 	}
 	// 展开卡 Box(1,1) 已 pad；折叠行自己留 1 格前导空格

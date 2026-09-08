@@ -35,6 +35,8 @@ import {
 	MAX_COMPARABLE_WRITE_BYTES,
 	MAX_WRITE_METADATA_ENTRIES,
 } from "../extensions/renderer/tool/diff/write-execution.ts";
+import { parseDiff } from "../extensions/renderer/tool/diff/diff-parse.ts";
+import type { HashlineAnchorsMode } from "../extensions/config/config.ts";
 
 const theme = {
 	fg(_color: string, text: string) {
@@ -50,6 +52,13 @@ const theme = {
 
 function output(component: any, width = 100): string[] {
 	return component.render(width);
+}
+
+/** Plain-text view of rendered rows — shiki highlighting carries ANSI. */
+function outputPlain(component: any, width = 100): string {
+	return output(component, width)
+		.join("\n")
+		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
 test("rich diff routes only successful edit/write results in on mode", () => {
@@ -555,7 +564,7 @@ test("write collapsed preview uses writeDiffCollapsedLines independently of edit
 			writeDiffCollapsedLines: 4,
 		},
 	);
-	const writeText = output(write).join("\n");
+	const writeText = outputPlain(write);
 	assert.match(writeText, /created/);
 	assert.match(writeText, /more/);
 	assert.match(writeText, /const value0 = 0/);
@@ -578,7 +587,7 @@ test("write collapsed preview uses writeDiffCollapsedLines independently of edit
 			writeDiffCollapsedLines: 0,
 		},
 	);
-	const editText = output(edit).join("\n");
+	const editText = outputPlain(edit);
 	assert.match(editText, /value 1/);
 	assert.match(editText, /more/);
 	assert.doesNotMatch(editText, /\+40 -0/, "edit must not use write stats-only collapse");
@@ -618,7 +627,7 @@ test("writeDiffCollapsedLines 0 shows stats only until expanded", () => {
 		store,
 		() => display,
 	);
-	const expandedText = output(expanded).join("\n");
+	const expandedText = outputPlain(expanded);
 	assert.match(expandedText, /const value0 = 0/);
 	assert.match(expandedText, /const value1 = 1/);
 });
@@ -764,4 +773,205 @@ test("external write owner disables rich diff instead of degrading every card", 
 		),
 		undefined,
 	);
+});
+
+// ---------------------------------------------------------------------------
+// Hashline-annotated edit diffs (pi-hashline-edit details.diff)
+// ---------------------------------------------------------------------------
+
+const HASHLINE_PAD2 = [
+	" 10#VR:const unchanged = true;",
+	"-10    const removed = false;",
+	"+10#KT:const added = true;",
+	" 11#PM:const tail = 2;",
+	"    ...",
+].join("\n");
+
+const HASHLINE_PAD3 = [" 30#VRS:function g() {", "-30       return 1;", "+30#KTP:  return 2;"].join(
+	"\n",
+);
+
+const HASHLINE_WHOLE_FILE = [
+	"-1    old line one",
+	"-2    old line two",
+	"+1#VR:new line one",
+	"+2#KT:new line two",
+].join("\n");
+
+function renderEditDiff(
+	diff: string,
+	options: { expanded?: boolean; width?: number; hashlineAnchors?: HashlineAnchorsMode } = {},
+): string {
+	const component = renderEditDiffResult(
+		{ diff },
+		{ expanded: options.expanded ?? false },
+		{
+			...DEFAULT_TOOL_DISPLAY_CONFIG,
+			hashlineAnchors: options.hashlineAnchors ?? "auto",
+		},
+		theme,
+		"fallback",
+	);
+	return outputPlain(component, options.width ?? 100);
+}
+
+test("hashline diff parse strips removed-line number+padding at exact width", () => {
+	const parsed = parseDiff(HASHLINE_PAD2);
+	const removed = parsed.entries.filter(
+		(entry): entry is Extract<typeof entry, { kind: "line" }> =>
+			entry.kind === "line" && entry.lineKind === "remove",
+	);
+	assert.equal(removed.length, 1);
+	assert.equal(removed[0]!.content, "const removed = false;", "number+padding stripped");
+	assert.equal(removed[0]!.oldLineNumber, 10, "old-side number seeded from the line itself");
+	assert.equal(
+		removed[0]!.hashlineAnchorContent,
+		undefined,
+		"removed lines expose no anchor label",
+	);
+	assert.equal(parsed.stats.context, 2, "elision is a meta row, not context");
+	assert.deepEqual(
+		parsed.entries.filter((entry) => entry.kind !== "line").map((entry) => entry.raw),
+		["    ..."],
+		"spaces-only elision recognized as meta",
+	);
+});
+
+test("hashline diff keeps true indentation of removed content at hashLength 2 and 3", () => {
+	const pad2 = parseDiff(HASHLINE_PAD2);
+	const removed2 = pad2.entries.find(
+		(entry): entry is Extract<typeof entry, { kind: "line" }> =>
+			entry.kind === "line" && entry.lineKind === "remove",
+	);
+	assert.equal(removed2!.content, "const removed = false;");
+
+	const pad3 = parseDiff(HASHLINE_PAD3);
+	const removed3 = pad3.entries.find(
+		(entry): entry is Extract<typeof entry, { kind: "line" }> =>
+			entry.kind === "line" && entry.lineKind === "remove",
+	);
+	assert.equal(removed3!.content, "  return 1;", "2-space indent survives the exact-width pad");
+	const added3 = pad3.entries.find(
+		(entry): entry is Extract<typeof entry, { kind: "line" }> =>
+			entry.kind === "line" && entry.lineKind === "add",
+	);
+	assert.equal(added3!.content, "  return 2;");
+});
+
+test("whole-file replacement with - first still gets old-side numbers", () => {
+	const parsed = parseDiff(HASHLINE_WHOLE_FILE);
+	const removed = parsed.entries.filter(
+		(entry): entry is Extract<typeof entry, { kind: "line" }> =>
+			entry.kind === "line" && entry.lineKind === "remove",
+	) as Array<{ content: string; oldLineNumber: number | null }>;
+	assert.deepEqual(
+		removed.map((entry) => [entry.oldLineNumber, entry.content]),
+		[
+			[1, "old line one"],
+			[2, "old line two"],
+		],
+		"numbers seeded by the removed lines themselves, not a context cursor",
+	);
+});
+
+test("standard unified diffs with anchor-shaped content never activate the strip", () => {
+	const standard = [
+		"diff --git a/f.ts b/f.ts",
+		"index 1..2 100644",
+		"--- a/f.ts",
+		"+++ b/f.ts",
+		"@@ -1,2 +1,2 @@",
+		" 10#VR:unchanged",
+		"-10    fake removed hashline shape",
+		"+10#AB:fake anchor content",
+	].join("\n");
+	const parsed = parseDiff(standard);
+	const removed = parsed.entries.find(
+		(entry): entry is Extract<typeof entry, { kind: "line" }> =>
+			entry.kind === "line" && entry.lineKind === "remove",
+	);
+	assert.equal(
+		removed!.content,
+		"10    fake removed hashline shape",
+		"@@/file headers close the gate; legacy generic behavior preserved",
+	);
+	const hunkOnly = parseDiff(
+		["@@ -1,2 +1,2 @@", "-10    fake removed shape", "+10#AB:fake anchor"].join("\n"),
+	);
+	assert.equal(
+		hunkOnly.entries.find(
+			(entry): entry is Extract<typeof entry, { kind: "line" }> =>
+				entry.kind === "line" && entry.lineKind === "remove",
+		)!.content,
+		"10    fake removed shape",
+		"hunk headers alone close the gate",
+	);
+	const looseOnly = parseDiff(["+10#ab:lowercase hash", "-10    removed"].join("\n"));
+	assert.equal(
+		looseOnly.entries.find(
+			(entry): entry is Extract<typeof entry, { kind: "line" }> =>
+				entry.kind === "line" && entry.lineKind === "remove",
+		)!.content,
+		"10    removed",
+		"loose-alphabet anchors do not open the strip gate",
+	);
+});
+
+test("hashline diff renders numeric gutters and plain content when collapsed", () => {
+	const text = renderEditDiff(HASHLINE_PAD2, { expanded: false, width: 100 });
+	assert.match(text, /const removed = false;/);
+	assert.doesNotMatch(text, /\d+ {4}const removed/, "no duplicated gutter number in content");
+	assert.doesNotMatch(text, /#VR|#KT|#PM/, "no anchor labels outside expanded unified");
+});
+
+test("expanded unified shows anchor labels for added/context and numbers for removed", () => {
+	const text = renderEditDiff(HASHLINE_PAD2, { expanded: true, width: 100 });
+	assert.match(text, /10#KT/, "added anchor label in the gutter");
+	assert.match(text, /10#VR/, "context anchor label in the gutter");
+	assert.match(text, /const removed = false;/, "removed content stripped");
+	assert.doesNotMatch(text, /10 {4}const removed/, "no leftover padding in the removed row");
+	const removedRow = text.split("\n").find((line) => line.includes("const removed = false;"))!;
+	assert.doesNotMatch(removedRow, /#/, "removed gutter shows a number, not an anchor");
+});
+
+test("narrow-width expansion forces compact presentation with plain content", () => {
+	const narrow = [" 1#VR:ctx", "-1    gone", "+1#KT:added"].join("\n");
+	const text = renderEditDiff(narrow, { expanded: true, width: 12 });
+	assert.match(text, /added/, "content renders");
+	assert.doesNotMatch(text, /#KT|#VR/, "no inline anchor prefixes in compact rows");
+	const wide = renderEditDiff(narrow, { expanded: true, width: 100 });
+	assert.doesNotMatch(wide, /1#KT:ctx|1#VR:ctx/, "unified rows also drop inline prefixes");
+});
+
+test("hashlineAnchors off shows numeric labels even expanded in unified", () => {
+	const text = renderEditDiff(HASHLINE_PAD2, {
+		expanded: true,
+		width: 100,
+		hashlineAnchors: "off",
+	});
+	assert.match(text, /const added = true;/);
+	assert.doesNotMatch(text, /#KT|#VR|#PM/, "off disables anchor labels everywhere");
+});
+
+test("split layout keeps numeric gutters for hashline diffs", () => {
+	const text = renderEditDiff(HASHLINE_PAD2, { expanded: true, width: 300 });
+	assert.match(text, /old/, "split header present");
+	assert.doesNotMatch(text, /#VR|#KT|#PM/, "anchors never leak into split panes");
+	assert.match(text, /const removed = false;/);
+});
+
+test("standard diff rendering is byte-identical to the pre-change path", () => {
+	const standard = [
+		"diff --git a/a.ts b/a.ts",
+		"index 1..2 100644",
+		"--- a/a.ts",
+		"+++ b/a.ts",
+		"@@ -1 +1 @@",
+		"-old",
+		"+new",
+	].join("\n");
+	const text = renderEditDiff(standard, { expanded: true, width: 100 });
+	assert.match(text, /old/);
+	assert.match(text, /new/);
+	assert.doesNotMatch(text, /#/);
 });

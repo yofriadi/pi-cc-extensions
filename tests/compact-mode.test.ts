@@ -2308,3 +2308,49 @@ test("isStreaming survives the compact + compact-thinking patch chain (mermaid f
 		assistantPrototype.updateContent = originalUpdateContent;
 	}
 });
+
+test("compact edit omits stats when the details diff parses to zero changes; write keeps (+0 -0)", () => {
+	const metadata = new WriteExecutionMetadataStore();
+	const previousMode = config.mode;
+	config.mode = "compact";
+	const hooks = installCompactMode({ writeMetadata: metadata });
+	try {
+		// (a) edit whose details.diff parses to zero change lines → no (+A -D) at
+		// all (never a false (+0 -0) from an uninformative payload).
+		const zeroEdit = tool("edit", "e-zero", { path: "z.ts" });
+		zeroEdit.updateResult({
+			content: [],
+			details: { diff: " 5#VR:unchanged line\n    ...\n" },
+			isError: false,
+		});
+		const zeroText = renderText(zeroEdit).join("\n");
+		assert.match(zeroText, /edit z\.ts/);
+		assert.doesNotMatch(zeroText, /\(\+\d+ -\d+\)/);
+
+		// (b) edit with a normal change diff → stats unchanged.
+		const normalEdit = tool("edit", "e-normal", { path: "a.ts" });
+		normalEdit.updateResult({
+			content: [],
+			details: { diff: "-old\n+new\n" },
+			isError: false,
+		});
+		assert.match(renderText(normalEdit).join("\n"), /edit a\.ts \(\+1 -1\)/);
+
+		// (c) write no-change → (+0 -0) STILL shows (edit-only suppression).
+		const write = tool("write", "w-zero", { path: "b.ts", content: "" });
+		metadata.set("w-zero", { fileExistedBeforeWrite: true, previousContent: "" });
+		write.updateResult({ content: [], isError: false });
+		assert.match(renderText(write).join("\n"), /write b\.ts \(\+0 -0\)/);
+
+		// (d) edit missing/unparseable diff → stats omitted (unknown stays unknown).
+		const unknownEdit = tool("edit", "e-unknown", { path: "u.ts" });
+		unknownEdit.updateResult({
+			content: [{ type: "text", text: "fallback output" }],
+			isError: false,
+		});
+		assert.doesNotMatch(renderText(unknownEdit).join("\n"), /\(\+\d+ -\d+\)/);
+	} finally {
+		config.mode = previousMode;
+		hooks.shutdown();
+	}
+});
