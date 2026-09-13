@@ -289,10 +289,11 @@ ANSI 剥离后无法展示背景，实际 TUI 行为如下：
 
 ```text
 ⠋ Working...
-⠋ Working... (↓ 1,234 tokens · 12s)
+⠋ Working... (↓ 1,234 tokens · 863 tok/s · 12s)
 ```
 
 - 流式阶段按文本字符数 `/ 4` 估算 token。
 - provider 提供 `usage.output` 时优先使用真实值。
+- 速率窗口：本响应首个内容 delta → done/error 冻结点，排除 TTFT；纯工具调用响应仅在有流式 usage 时显示。
 - 支持多文本块、`text_end`/`done`/`error` 校准和跨 turn 重置。
 - turn 结束后立即恢复默认状态，不显示 `✻ Turn took ...`。

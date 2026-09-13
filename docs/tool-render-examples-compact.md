@@ -120,5 +120,5 @@ edit/write 标题行带统计；折叠预览与展开正文复用 mode=on 的 Di
 
 ```text
 ⠋ Working...
-⠋ Working... (↓ 1,234 tokens · 12s)
+⠋ Working... (↓ 1,234 tokens · 863 tok/s · 12s)
 ```

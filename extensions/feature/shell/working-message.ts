@@ -15,6 +15,11 @@ function formatCount(value: number): string {
 	return new Intl.NumberFormat("en-US").format(value);
 }
 
+/** tok/s 显示格式：≥ 100 取整（`863`），低于 100 保留一位小数（`87.4`）。 */
+function formatTps(tps: number): string {
+	return tps >= 100 ? String(Math.round(tps)) : tps.toFixed(1);
+}
+
 type ContentBlock = {
 	type?: unknown;
 	text?: unknown;
@@ -53,10 +58,14 @@ type WorkingUi = {
 
 /**
  * Extend Pi's footer working row while preserving its spinner and "Working...":
- * `⠋ Working... (↓ 1,234 tokens · 12s)`
+ * `⠋ Working... (↓ 1,234 tokens · 863 tok/s · 12s)`
  *
  * Live tokens use the same chars/4 estimate as pi-claude-code-ui, then switch to
  * provider `usage.output` whenever the stream exposes an actual count.
+ *
+ * Speed = tokens ÷ the window from the response's first content delta to now, or to
+ * the response's end time once it is done/errored (frozen there). Excludes
+ * time-to-first-token; updates ride the existing 1s refresh tick — no new timer.
  */
 export default function (pi: ExtensionAPI): void {
 	let turnActive = false;
@@ -65,6 +74,10 @@ export default function (pi: ExtensionAPI): void {
 	let responseLength = 0;
 	let responseTextBlockLengths: number[] = [];
 	let providerOutputTokens = 0;
+	/** 本响应首个内容 delta 的 Date.now()；0 = 尚无 delta。 */
+	let firstDeltaTime = 0;
+	/** done/error 时刻的 Date.now()，冻结速率分母；0 = 仍在流式输出。 */
+	let responseEndTime = 0;
 	let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 	let lastMessage: string | null = null;
 	let activeCtx: { ui: WorkingUi | undefined; hasUI: boolean } | null = null;
@@ -79,6 +92,10 @@ export default function (pi: ExtensionAPI): void {
 		responseLength = Math.max(0, responseLength + responseTextBlockLengths[index] - previous);
 	}
 
+	/**
+	 * 重置 token 统计。刻意不清 firstDeltaTime/responseEndTime：done/error 也会走到这里，
+	 * 而速率窗口必须在响应结束后存活；两者改在 start/turn_start/clearDisplay 显式清零。
+	 */
 	function resetResponseTracking(message?: StreamMessage): void {
 		responseTextBlockLengths = message ? textBlockLengths(message) : [];
 		responseLength = responseTextBlockLengths.reduce((sum, length) => sum + length, 0);
@@ -104,6 +121,10 @@ export default function (pi: ExtensionAPI): void {
 		const parts: string[] = [];
 		const tokens = tokenCount();
 		if (tokens > 0) parts.push(`↓ ${formatCount(tokens)} tokens`);
+		if (tokens > 0 && firstDeltaTime > 0) {
+			const basis = (responseEndTime || Date.now()) - firstDeltaTime;
+			if (basis > 0) parts.push(`${formatTps(tokens / (basis / 1000))} tok/s`);
+		}
 		// compact 活动回合且已滚出摘要行：直接用摘要行文案（自带回合时长，不叠 agent 计时）。
 		const compactStatus = compactMirrorText();
 		if (compactStatus) return [compactStatus, ...parts].join(" · ");
@@ -180,6 +201,8 @@ export default function (pi: ExtensionAPI): void {
 		agentStartTime = 0;
 		turnStartTime = 0;
 		resetResponseTracking();
+		firstDeltaTime = 0;
+		responseEndTime = 0;
 		restoreDefaultWorkingMessage();
 	}
 
@@ -193,6 +216,8 @@ export default function (pi: ExtensionAPI): void {
 		turnStartTime = Date.now();
 		if (!agentStartTime) agentStartTime = turnStartTime;
 		resetResponseTracking();
+		firstDeltaTime = 0;
+		responseEndTime = 0;
 		syncWorkingMessage(true);
 		scheduleRefreshTick();
 	});
@@ -204,6 +229,8 @@ export default function (pi: ExtensionAPI): void {
 
 		if (evt.type === "start") {
 			resetResponseTracking(evt.partial);
+			firstDeltaTime = 0;
+			responseEndTime = 0;
 		} else if (evt.type === "thinking_start" || evt.type === "text_start") {
 			setTextBlockLength(evt.contentIndex, 0);
 			updateProviderUsage(evt.partial);
@@ -211,16 +238,23 @@ export default function (pi: ExtensionAPI): void {
 			const add = typeof evt.delta === "string" ? evt.delta.length : 0;
 			setTextBlockLength(evt.contentIndex, (responseTextBlockLengths[evt.contentIndex] ?? 0) + add);
 			updateProviderUsage(evt.partial);
+			if (!firstDeltaTime) firstDeltaTime = Date.now();
 		} else if (evt.type === "text_end") {
 			setTextBlockLength(
 				evt.contentIndex,
 				typeof evt.content === "string" ? evt.content.length : 0,
 			);
 			updateProviderUsage(evt.partial);
+		} else if (evt.type === "toolcall_delta") {
+			// 仅作速率锚点并透传 usage.output；不计入 chars/4 估算（与现有 token 统计一致）。
+			if (!firstDeltaTime) firstDeltaTime = Date.now();
+			updateProviderUsage(evt.partial);
 		} else if (evt.type === "done") {
 			resetResponseTracking(evt.message);
+			responseEndTime = Date.now();
 		} else if (evt.type === "error") {
 			resetResponseTracking(evt.error);
+			responseEndTime = Date.now();
 		} else {
 			updateProviderUsage(evt.partial);
 		}

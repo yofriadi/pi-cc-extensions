@@ -596,7 +596,7 @@ export async function showCcstylePanel(
 		const workingMessageToggle = featureToggleSetting(
 			"enableWorkingMessage",
 			"Working message",
-			"Extend Working... footer with token count and elapsed time. Next restart applies.",
+			"Extend Working... footer with token count, speed, and elapsed time. Next restart applies.",
 			"Native Working... footer only.",
 			config.enableWorkingMessage,
 		);

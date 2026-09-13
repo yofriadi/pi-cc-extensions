@@ -53,7 +53,7 @@ pi install git:github.com/minuque/pi-cc-extensions
   "enableSubagentAutocomplete": true,      // @subagent:[name] 补全与委派提示
   "enableContextCommand": true,            // /context 上下文检查
   "enableAgentSummary": true,              // 每回合工具摘要
-  "enableWorkingMessage": true,            // Working... 底部 token/耗时
+  "enableWorkingMessage": true,            // Working... 底部 token/速率/耗时
   "enableAliases": true,                   // /clear、/exit 别名
 
   // ui

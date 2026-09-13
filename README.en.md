@@ -53,7 +53,7 @@ Renderer snapshots for `on` / `compact` modes: [default](./docs/tool-render-exam
   "enableSubagentAutocomplete": true, // @subagent:[name] completion and delegation hints
   "enableContextCommand": true, // /context usage check
   "enableAgentSummary": true, // per-turn tool summary
-  "enableWorkingMessage": true, // Working... bottom token/elapsed
+  "enableWorkingMessage": true, // Working... bottom token/speed/elapsed
   "enableAliases": true, // /clear, /exit aliases
 
   // ui
