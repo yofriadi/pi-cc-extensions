@@ -286,6 +286,15 @@ export function parseDiff(diffText: string): ParsedDiff {
 	// spaces-only `...` rows. Both shapes are recognized only behind the gate.
 	const hashlineAnnotated = isHashlineAnnotatedDiff(diffText);
 	const hashlineRemovedPad = hashlineAnnotated ? hashlineRemovedPadWidth(diffText) : null;
+	// Any anchor-shaped row (`NN#hash:`) marks the entire diff as hashline-format:
+	// Pi's headerless rows always separate the number from content with a space,
+	// so they can never be anchor-shaped themselves. Once such a row exists,
+	// the Pi numeric-row fallback must stay off for the whole diff — numeric-
+	// looking source text near anchors is content, not a Pi line number.
+	const hashlineAnchorRows = diffText
+		.replace(/\r/g, "")
+		.split("\n")
+		.some((line) => HASHLINE_ANCHOR_LINE_PATTERN.test(line));
 
 	for (const rawLine of diffText.replace(/\r/g, "").split("\n")) {
 		stats.lines++;
@@ -323,8 +332,14 @@ export function parseDiff(diffText: string): ParsedDiff {
 			continue;
 		}
 
-		// Pi's headerless format is ambiguous with numeric source text in unified hunks.
-		const canonical = parseCanonicalDiffLine(rawLine, !hasHunkHeader, hashlineRemovedPad);
+		// Pi's headerless format is ambiguous both with numeric source text after
+		// hunk headers and with hashline diffs — an anchor-shaped row means the format
+		// is hashline, never Pi's space-separated numeric rows.
+		const canonical = parseCanonicalDiffLine(
+			rawLine,
+			!hasHunkHeader && !hashlineAnchorRows,
+			hashlineRemovedPad,
+		);
 		if (canonical) {
 			hunkIndex = ensureImplicitHunk(hunkIndex);
 			stats.hunks = Math.max(stats.hunks, hunkIndex);
