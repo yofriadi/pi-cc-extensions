@@ -72,6 +72,7 @@ Notes:
 - `git rebase --abort` is always safe; `git reflog` recovers any rebase step for ~90 days.
 - Push `--force-with-lease`, never bare `--force` — it refuses if `origin/main` moved (e.g. another machine pushed).
 - Conflicts land mostly in the diff renderer (`diff-parse.ts`, `diff-edit-render.ts`, `compact-mode.ts`, `default-mode.ts` + their tests) — the 2026-09-13 fork sync's overlap surface. 10/11 commits replayed clean; the last needed the gate-fix in d565aed.
+- 2026-09-14 sync onto v0.9.1: squashed the 8 openspec process commits into the hashline feature commit (`fixup -C`) so the stack is one commit per concern. Overlap surface: `tests/tool-diff.test.ts` (both sides appended test sections — keep both), README config-sample block (upstream's `enableCustomFooter` line + fork's speed comment). Upstream's `insetComponent` width clamp auto-merged and did not alter hashline renders (snapshot diff was version-stamp + Braille frames only).
 - **Never skip step 4.** Textual merges can break runtime: upstream's `PI_LINE_PATTERN` + the hashline gate merged clean but hijacked `-10    removed` as a Pi line number — only the test caught it (fixed in d565aed: any anchor-shaped row `NN#hash:` now suppresses the Pi numeric fallback diff-wide).
 - `git config rerere.enabled true` records conflict resolutions and auto-reuses them on the next sync.
 - When upstream absorbs one of the fork's fixes, drop that commit in `git rebase -i upstream/main` instead of re-resolving around it.
